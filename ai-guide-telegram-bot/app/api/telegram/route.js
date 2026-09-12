@@ -8,17 +8,12 @@ const TELEGRAM_API = BOT_TOKEN
 const MAIN_KEYBOARD = {
   keyboard: [
     [{ text: "🤖 Моделі ШІ" }, { text: "💰 Тарифи" }],
-    [{ text: "🎯 Який ШІ обрати?" }, { text: "🧰 Для чого підходять" }],
-    [{ text: "📚 Словник ШІ" }, { text: "ℹ️ Про бота" }],
-    [{ text: "💬 Чат з ШІ" }]
+    [{ text: "🌤 Погода" }, { text: "🕒 Час" }],
+    [{ text: "💱 Валюта" }, { text: "💬 Чат з ШІ" }],
+    [{ text: "🎯 Який ШІ обрати?" }, { text: "ℹ️ Про бота" }]
   ],
   resize_keyboard: true,
   is_persistent: true
-};
-
-const BACK_KEYBOARD = {
-  keyboard: [[{ text: "⬅️ Головне меню" }]],
-  resize_keyboard: true
 };
 
 async function tg(method, payload) {
@@ -35,10 +30,8 @@ async function tg(method, payload) {
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `Telegram API error: ${response.status} ${errorText}`
-    );
+    const text = await response.text();
+    throw new Error(`Telegram API error: ${text}`);
   }
 
   return response.json();
@@ -48,7 +41,6 @@ function sendMessage(chatId, text, extra = {}) {
   return tg("sendMessage", {
     chat_id: chatId,
     text,
-    parse_mode: "HTML",
     disable_web_page_preview: true,
     ...extra
   });
@@ -57,187 +49,168 @@ function sendMessage(chatId, text, extra = {}) {
 function mainMenu(chatId) {
   return sendMessage(
     chatId,
-    "<b>AI Guide</b> 🤖\n\nЯ допоможу розібратися у популярних нейромережах.\n\nМожеш вибрати розділ нижче або просто написати мені будь-яке питання.",
+    `🤖 AI Guide
+
+Можеш користуватися кнопками або просто написати питання звичайними словами.
+
+Наприклад:
+• Яка погода в Токіо?
+• Погода завтра в Парижі
+• Скільки часу в Нью-Йорку?
+• 100 USD в EUR
+• Поясни Python`,
     { reply_markup: MAIN_KEYBOARD }
   );
 }
 
-function modelMenu(chatId) {
-  return sendMessage(
-    chatId,
-    "<b>Популярні AI-сервіси</b>\n\nОбери сервіс:",
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "ChatGPT", callback_data: "model_chatgpt" },
-            { text: "Claude", callback_data: "model_claude" }
-          ],
-          [
-            { text: "Gemini", callback_data: "model_gemini" },
-            { text: "Grok", callback_data: "model_grok" }
-          ],
-          [
-            { text: "Perplexity", callback_data: "model_perplexity" },
-            { text: "Copilot", callback_data: "model_copilot" }
-          ]
-        ]
-      }
-    }
+async function findLocation(city) {
+  const url =
+    `https://geocoding-api.open-meteo.com/v1/search` +
+    `?name=${encodeURIComponent(city)}` +
+    `&count=1&language=uk&format=json`;
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error("Geocoding failed");
+  }
+
+  const data = await response.json();
+
+  if (!data.results?.length) {
+    return null;
+  }
+
+  return data.results[0];
+}
+
+function weatherEmoji(code) {
+  if (code === 0) return "☀️";
+  if ([1, 2].includes(code)) return "🌤";
+  if (code === 3) return "☁️";
+  if ([45, 48].includes(code)) return "🌫";
+  if ([51, 53, 55, 56, 57].includes(code)) return "🌦";
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return "🌧";
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return "❄️";
+  if ([95, 96, 99].includes(code)) return "⛈";
+  return "🌡";
+}
+
+async function getWeather(city, tomorrow = false) {
+  const location = await findLocation(city);
+
+  if (!location) {
+    return `Не знайшов місто "${city}".`;
+  }
+
+  const url =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${location.latitude}` +
+    `&longitude=${location.longitude}` +
+    `&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+    `&timezone=auto&forecast_days=3`;
+
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    return "Не вдалося отримати погоду.";
+  }
+
+  const data = await response.json();
+
+  const place = `${location.name}, ${location.country || ""}`;
+
+  if (tomorrow) {
+    const i = 1;
+
+    return (
+      `${weatherEmoji(data.daily.weather_code[i])} Погода завтра\n\n` +
+      `📍 ${place}\n` +
+      `🌡 ${data.daily.temperature_2m_min[i]}°C — ${data.daily.temperature_2m_max[i]}°C\n` +
+      `🌧 Ймовірність опадів: ${data.daily.precipitation_probability_max[i]}%`
+    );
+  }
+
+  return (
+    `${weatherEmoji(data.current.weather_code)} Погода зараз\n\n` +
+    `📍 ${place}\n` +
+    `🌡 Температура: ${data.current.temperature_2m}°C\n` +
+    `🤔 Відчувається як: ${data.current.apparent_temperature}°C\n` +
+    `💨 Вітер: ${data.current.wind_speed_10m} км/год\n\n` +
+    `📈 Сьогодні: ${data.daily.temperature_2m_min[0]}°C — ${data.daily.temperature_2m_max[0]}°C\n` +
+    `🌧 Опади: ${data.daily.precipitation_probability_max[0]}%`
   );
 }
 
-function tariffsMenu(chatId) {
-  return sendMessage(
-    chatId,
-    "<b>Тарифи AI-сервісів</b> 💰\n\nОбери сервіс:",
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: "ChatGPT", callback_data: "price_chatgpt" },
-            { text: "Claude", callback_data: "price_claude" }
-          ],
-          [
-            { text: "Gemini", callback_data: "price_gemini" },
-            { text: "Grok", callback_data: "price_grok" }
-          ],
-          [
-            { text: "Perplexity", callback_data: "price_perplexity" }
-          ]
-        ]
-      }
-    }
+async function getWorldTime(city) {
+  const location = await findLocation(city);
+
+  if (!location) {
+    return `Не знайшов місто "${city}".`;
+  }
+
+  if (!location.timezone) {
+    return "Не вдалося визначити часовий пояс.";
+  }
+
+  const time = new Intl.DateTimeFormat("uk-UA", {
+    timeZone: location.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(new Date());
+
+  const date = new Intl.DateTimeFormat("uk-UA", {
+    timeZone: location.timezone,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    weekday: "long"
+  }).format(new Date());
+
+  return (
+    `🕒 ${location.name}, ${location.country || ""}\n\n` +
+    `Час: ${time}\n` +
+    `Дата: ${date}\n` +
+    `🌍 Часовий пояс: ${location.timezone}`
   );
 }
 
-const TEXTS = {
-  model_chatgpt: `<b>ChatGPT</b>
+async function convertCurrency(amount, from, to) {
+  from = from.toUpperCase();
+  to = to.toUpperCase();
 
-✅ Добре підходить для:
-• навчання;
-• програмування;
-• текстів;
-• ідей;
-• аналізу;
-• роботи з файлами.
+  const url =
+    `https://api.frankfurter.dev/v2/rate/` +
+    `${encodeURIComponent(from)}/${encodeURIComponent(to)}`;
 
-<b>Перевага:</b> універсальний AI-помічник.`,
+  const response = await fetch(url);
 
-  model_claude: `<b>Claude</b>
+  if (!response.ok) {
+    return `Не вдалося знайти курс ${from} → ${to}.`;
+  }
 
-✅ Добре підходить для:
-• великих текстів;
-• документів;
-• програмування;
-• аналізу інформації.
+  const data = await response.json();
 
-<b>Перевага:</b> добре працює з довгими текстами.`,
+  const rate = data.rate;
 
-  model_gemini: `<b>Google Gemini</b>
+  if (!rate) {
+    return "Не вдалося отримати курс.";
+  }
 
-✅ Добре підходить для:
-• навчання;
-• роботи з Google-сервісами;
-• текстів;
-• фото;
-• пошуку ідей.
+  const result = amount * rate;
 
-<b>Перевага:</b> інтеграція з Google.`,
-
-  model_grok: `<b>Grok</b>
-
-✅ Добре підходить для:
-• актуальних подій;
-• пошуку інформації;
-• програмування;
-• аналізу.
-
-<b>Перевага:</b> добре працює з актуальною інформацією.`,
-
-  model_perplexity: `<b>Perplexity</b>
-
-✅ Добре підходить для:
-• пошуку інформації;
-• відповідей із джерелами;
-• рефератів;
-• досліджень.
-
-<b>Перевага:</b> показує джерела.`,
-
-  model_copilot: `<b>Microsoft Copilot</b>
-
-✅ Добре підходить для:
-• Windows;
-• Microsoft 365;
-• програмування;
-• офісних задач.
-
-<b>Перевага:</b> інтеграція з Microsoft.`,
-
-  price_chatgpt: `<b>ChatGPT — тарифи</b>
-
-• Free — безкоштовний.
-• Є платні тарифи з більшими лімітами.
-
-⚠️ Ціни можуть змінюватися.`,
-
-  price_claude: `<b>Claude — тарифи</b>
-
-Є безкоштовний доступ і платні тарифи.
-
-⚠️ Умови можуть змінюватися.`,
-
-  price_gemini: `<b>Gemini — тарифи</b>
-
-Є безкоштовна версія та платні Google AI-плани.`,
-
-  price_grok: `<b>Grok — тарифи</b>
-
-Є безкоштовний доступ та платні тарифи.`,
-
-  price_perplexity: `<b>Perplexity — тарифи</b>
-
-Є безкоштовна версія та платний Pro.`,
-
-  choose: `<b>Який ШІ обрати?</b> 🎯
-
-📚 Навчання — ChatGPT / Gemini
-💻 Код — ChatGPT / Claude / Copilot
-🔎 Пошук — Perplexity
-📰 Актуальні події — Grok
-📄 Документи — Claude / ChatGPT
-✍️ Тексти — Claude / ChatGPT`,
-
-  usecases: `<b>Для чого використовують ШІ?</b> 🧰
-
-• навчання;
-• програмування;
-• переклад;
-• пошук інформації;
-• створення текстів;
-• ідеї;
-• аналіз;
-• допомога з контентом.`,
-
-  glossary: `<b>Міні-словник ШІ</b> 📚
-
-<b>AI / ШІ</b> — штучний інтелект.
-<b>LLM</b> — велика мовна модель.
-<b>Prompt</b> — запит до ШІ.
-<b>Token</b> — частина тексту.
-<b>API</b> — спосіб підключити ШІ до програми або бота.`,
-
-  about: `<b>Про бота</b> ℹ️
-
-AI Guide — Telegram-бот про штучний інтелект.
-
-У ньому можна дізнатися про популярні AI-сервіси та поспілкуватися з ШІ.`
-};
+  return (
+    `💱 Конвертація валют\n\n` +
+    `${amount} ${from} ≈ ${result.toFixed(2)} ${to}\n` +
+    `Курс: 1 ${from} ≈ ${Number(rate).toFixed(4)} ${to}`
+  );
+}
 
 async function askAI(userText) {
   if (!OPENROUTER_API_KEY) {
-    return "⚠️ OPENROUTER_API_KEY не налаштований у Vercel.";
+    return "OPENROUTER_API_KEY не налаштований.";
   }
 
   const response = await fetch(
@@ -254,7 +227,7 @@ async function askAI(userText) {
           {
             role: "system",
             content:
-              "Ти AI-помічник Telegram-бота AI Guide. Відповідай зрозуміло, корисно і не надто довго. Відповідай мовою користувача."
+              "Ти корисний AI-помічник. Відповідай мовою користувача. Пиши зрозуміло і не занадто довго. Якщо користувач питає про погоду, поточний час або курс валют, не вигадуй актуальні дані."
           },
           {
             role: "user",
@@ -267,35 +240,49 @@ async function askAI(userText) {
 
   if (!response.ok) {
     const errorText = await response.text();
-    console.error("OpenRouter error:", response.status, errorText);
+    console.error("OpenRouter:", errorText);
 
-    return "⚠️ ШІ зараз не зміг відповісти. Спробуй ще раз трохи пізніше.";
+    return "ШІ зараз не зміг відповісти.";
   }
 
   const data = await response.json();
 
   return (
     data.choices?.[0]?.message?.content ||
-    "Не вдалося отримати відповідь від ШІ."
+    "Не вдалося отримати відповідь."
   );
 }
 
-async function handleCallback(callback) {
-  const chatId = callback.message?.chat?.id;
+function extractWeatherCity(text) {
+  let city = text
+    .replace(/яка\s+погода/gi, "")
+    .replace(/какая\s+погода/gi, "")
+    .replace(/погода/gi, "")
+    .replace(/завтра/gi, "")
+    .replace(/сьогодні/gi, "")
+    .replace(/сегодня/gi, "")
+    .replace(/\?/g, "")
+    .trim();
 
-  if (!chatId) return;
+  city = city.replace(/^(в|у|во)\s+/i, "");
 
-  await tg("answerCallbackQuery", {
-    callback_query_id: callback.id
-  });
+  return city;
+}
 
-  const text = TEXTS[callback.data];
+function extractTimeCity(text) {
+  let city = text
+    .replace(/скільки\s+(зараз\s+)?часу/gi, "")
+    .replace(/сколько\s+(сейчас\s+)?времени/gi, "")
+    .replace(/который\s+час/gi, "")
+    .replace(/котра\s+година/gi, "")
+    .replace(/время/gi, "")
+    .replace(/час/gi, "")
+    .replace(/\?/g, "")
+    .trim();
 
-  if (text) {
-    await sendMessage(chatId, text, {
-      reply_markup: BACK_KEYBOARD
-    });
-  }
+  city = city.replace(/^(в|у|во)\s+/i, "");
+
+  return city;
 }
 
 async function handleMessage(message) {
@@ -304,57 +291,142 @@ async function handleMessage(message) {
 
   if (!text) return;
 
-  if (
-    ["/start", "/menu", "⬅️ Головне меню"].includes(text)
-  ) {
+  const lower = text.toLowerCase();
+
+  if (["/start", "/menu", "⬅️ головне меню"].includes(lower)) {
     return mainMenu(chatId);
-  }
-
-  if (text === "/help") {
-    return sendMessage(
-      chatId,
-      "<b>Команди:</b>\n\n/start — запуск\n/menu — меню\n/help — допомога\n/models — моделі\n/prices — тарифи\n\nТакож можеш просто написати будь-яке питання.",
-      { reply_markup: MAIN_KEYBOARD }
-    );
-  }
-
-  if (text === "/models" || text === "🤖 Моделі ШІ") {
-    return modelMenu(chatId);
-  }
-
-  if (text === "/prices" || text === "💰 Тарифи") {
-    return tariffsMenu(chatId);
-  }
-
-  if (text === "🎯 Який ШІ обрати?") {
-    return sendMessage(chatId, TEXTS.choose, {
-      reply_markup: BACK_KEYBOARD
-    });
-  }
-
-  if (text === "🧰 Для чого підходять") {
-    return sendMessage(chatId, TEXTS.usecases, {
-      reply_markup: BACK_KEYBOARD
-    });
-  }
-
-  if (text === "📚 Словник ШІ") {
-    return sendMessage(chatId, TEXTS.glossary, {
-      reply_markup: BACK_KEYBOARD
-    });
-  }
-
-  if (text === "ℹ️ Про бота") {
-    return sendMessage(chatId, TEXTS.about, {
-      reply_markup: BACK_KEYBOARD
-    });
   }
 
   if (text === "💬 Чат з ШІ") {
     return sendMessage(
       chatId,
-      "🤖 <b>Чат з ШІ</b>\n\nНапиши мені будь-яке питання нижче 👇",
-      { reply_markup: MAIN_KEYBOARD }
+      "🤖 Напиши будь-яке питання."
+    );
+  }
+
+  if (text === "🌤 Погода") {
+    return sendMessage(
+      chatId,
+      "🌤 Напиши, наприклад:\n\nПогода Лондон\nПогода завтра Токіо"
+    );
+  }
+
+  if (text === "🕒 Час") {
+    return sendMessage(
+      chatId,
+      "🕒 Напиши, наприклад:\n\nСкільки часу в Нью-Йорку?\nВремя Токио"
+    );
+  }
+
+  if (text === "💱 Валюта") {
+    return sendMessage(
+      chatId,
+      "💱 Напиши, наприклад:\n\n100 USD в EUR\n50 EUR в USD"
+    );
+  }
+
+  const currencyMatch = text.match(
+    /(\d+(?:[.,]\d+)?)\s*([A-Za-z]{3})\s+(?:в|у|to|in)\s+([A-Za-z]{3})/i
+  );
+
+  if (currencyMatch) {
+    const amount = Number(currencyMatch[1].replace(",", "."));
+    const from = currencyMatch[2];
+    const to = currencyMatch[3];
+
+    return sendMessage(
+      chatId,
+      await convertCurrency(amount, from, to)
+    );
+  }
+
+  if (
+    lower.includes("погода") ||
+    lower.includes("weather")
+  ) {
+    const tomorrow =
+      lower.includes("завтра") ||
+      lower.includes("tomorrow");
+
+    const city = extractWeatherCity(text);
+
+    if (!city) {
+      return sendMessage(
+        chatId,
+        "Напиши місто. Наприклад: Погода в Лондоні"
+      );
+    }
+
+    await tg("sendChatAction", {
+      chat_id: chatId,
+      action: "typing"
+    });
+
+    return sendMessage(
+      chatId,
+      await getWeather(city, tomorrow)
+    );
+  }
+
+  if (
+    lower.includes("скільки часу") ||
+    lower.includes("сколько времени") ||
+    lower.includes("время") ||
+    lower.includes("котра година") ||
+    lower.includes("который час")
+  ) {
+    const city = extractTimeCity(text);
+
+    if (!city) {
+      return sendMessage(
+        chatId,
+        "Напиши місто. Наприклад: Скільки часу в Токіо?"
+      );
+    }
+
+    return sendMessage(
+      chatId,
+      await getWorldTime(city)
+    );
+  }
+
+  if (text === "🤖 Моделі ШІ") {
+    return sendMessage(
+      chatId,
+      "🤖 ChatGPT, Claude, Gemini, Grok, Perplexity та Copilot — популярні AI-сервіси."
+    );
+  }
+
+  if (text === "💰 Тарифи") {
+    return sendMessage(
+      chatId,
+      "💰 У більшості AI-сервісів є безкоштовні та платні тарифи."
+    );
+  }
+
+  if (text === "🎯 Який ШІ обрати?") {
+    return sendMessage(
+      chatId,
+      `🎯 Коротко:
+
+Навчання — ChatGPT / Gemini
+Код — ChatGPT / Claude
+Пошук — Perplexity
+Документи — Claude
+Microsoft — Copilot`
+    );
+  }
+
+  if (text === "ℹ️ Про бота") {
+    return sendMessage(
+      chatId,
+      `ℹ️ AI Guide
+
+Бот уміє:
+🌤 показувати погоду по світу
+🕒 показувати час у різних містах
+💱 конвертувати валюти
+🤖 відповідати через ШІ`
     );
   }
 
@@ -366,8 +438,7 @@ async function handleMessage(message) {
   const answer = await askAI(text);
 
   return sendMessage(chatId, answer, {
-    reply_markup: MAIN_KEYBOARD,
-    parse_mode: undefined
+    reply_markup: MAIN_KEYBOARD
   });
 }
 
@@ -427,10 +498,6 @@ export async function POST(request) {
 
   try {
     const update = await request.json();
-
-    if (update.callback_query) {
-      await handleCallback(update.callback_query);
-    }
 
     if (update.message) {
       await handleMessage(update.message);
